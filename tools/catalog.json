@@ -1,0 +1,25 @@
+{
+  "tools": [
+    {
+      "id": "numpy",
+      "name": "NumPy",
+      "description": "محاسبات عددی و آرایه‌ها برای پایتون",
+      "type": "pip",
+      "package": "numpy"
+    },
+    {
+      "id": "requests",
+      "name": "Requests",
+      "description": "ارسال درخواست HTTP",
+      "type": "pip",
+      "package": "requests"
+    },
+    {
+      "id": "pytest",
+      "name": "Pytest",
+      "description": "اجرای تست‌های واحد برای کد پایتون",
+      "type": "pip",
+      "package": "pytest"
+    }
+  ]
+}
