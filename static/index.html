@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>میزبان هوش مصنوعی</title>
+<style>
+  body { font-family: Tahoma, sans-serif; margin: 0; background: #f4f5f7; }
+  #tabs { display: flex; gap: 8px; padding: 10px; background: #fff; border-bottom: 1px solid #ddd; }
+  #tabs button { padding: 8px 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+  #tabs button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  #models { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px; background: #fff; }
+  #models button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fafafa; cursor: pointer; }
+  #models button.selected { border-color: #16a34a; background: #dcfce7; }
+  #chat { height: 65vh; overflow-y: auto; padding: 16px; }
+  .msg { max-width: 80%; margin: 10px 0; padding: 10px 14px; border-radius: 10px; background: #fff; white-space: pre-wrap; line-height: 1.8; word-wrap: break-word; }
+  .msg.user { margin-right: auto; background: #dbeafe; }
+  .msg.assistant { margin-left: auto; background: #f1f5f9; }
+  .copy { display: block; margin-top: 6px; font-size: 12px; cursor: pointer; border: none; background: none; color: #2563eb; }
+  .status { font-size: 12px; color: #666; margin: 4px 0; }
+  #inputbar { display: flex; gap: 8px; padding: 10px; background: #fff; border-top: 1px solid #ddd; }
+  #text { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit; }
+  #inputbar button { padding: 10px 14px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+  #inputbar button:disabled { opacity: .5; cursor: not-allowed; }
+  #mic.listening { background: #dc2626; }
+</style>
+</head>
+<body>
+
+<div id="tabs">
+  <button id="tab-free" class="active">مدل‌های رایگان</button>
+  <button id="tab-paid">مدل‌های پولی</button>
+</div>
+<div id="models"></div>
+
+<div id="chat"></div>
+
+<div id="inputbar">
+  <input type="file" id="img" accept="image/*" style="display:none">
+  <button id="imgbtn">عکس</button>
+  <button id="mic">میکروفون</button>
+  <input id="text" placeholder="پیام خود را بنویسید...">
+  <button id="send">ارسال</button>
+</div>
+
+<script>
+// ---------- وضعیت ----------
+let allModels = [];
+let currentModel = null;
+let currentTab = "free";
+let busy = false;
+const history = [];
+
+const chatEl = document.getElementById("chat");
+const textEl = document.getElementById("text");
+const sendBtn = document.getElementById("send");
+const imgInput = document.getElementById("img");
+const micBtn = document.getElementById("mic");
+
+// ---------- مدل‌ها ----------
+async function loadModels() {
+  try {
+    const r = await fetch("/models");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    allModels = await r.json();
+    showTab("free");
+  } catch (e) {
+    addStatus("خطا در بارگذاری مدل‌ها: " + e.message);
+  }
+}
+
+function showTab(tab) {
+  currentTab = tab;
+  document.getElementById("tab-free").classList.toggle("active", tab === "free");
+  document.getElementById("tab-paid").classList.toggle("active", tab === "paid");
+  const box = document.getElementById("models");
+  box.innerHTML = "";
+  allModels
+    .filter(m => m.free === (tab === "free"))
+    .forEach(m => {
+      const b = document.createElement("button");
+      b.textContent = m.name;
+      b.dataset.id = m.id;
+      if (m.id === currentModel) b.classList.add("selected");
+      b.onclick = () => selectModel(m.id, b);
+      box.appendChild(b);
+    });
+}
+
+function selectModel(id, btn) {
+  if (id !== currentModel && history.length > 0) {
+    // تغییر مدل وسط مکالمه: تاریخچه را ریست می‌کنیم تا مدل جدید گیج نشود
+    if (!confirm("تغییر مدل باعث پاک شدن تاریخچه‌ی مکالمه می‌شود. ادامه می‌دهید؟")) return;
+    history.length = 0;
+    chatEl.innerHTML = "";
+  }
+  currentModel = id;
+  document.querySelectorAll("#models button").forEach(b => b.classList.remove("selected"));
+  btn.classList.add("selected");
+}
+
+document.getElementById("tab-free").onclick = () => showTab("free");
+document.getElementById("tab-paid").onclick = () => showTab("paid");
+
+// ---------- نمایش پیام‌ها ----------
+function addBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  const span = document.createElement("span");
+  span.textContent = text;
+  div.appendChild(span);
+  if (role === "assistant") {
+    const btn = document.createElement("button");
+    btn.className = "copy";
+    btn.textContent = "کپی";
+    btn.onclick = () => navigator.clipboard.writeText(span.textContent);
+    div.appendChild(btn);
+  }
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return { div, span };
+}
+
+let lastStatusEl = null;
+function addStatus(text) {
+  if (lastStatusEl) lastStatusEl.remove();
+  const s = document.createElement("div");
+  s.className = "status";
+  s.textContent = text;
+  chatEl.appendChild(s);
+  lastStatusEl = s;
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function clearStatus() {
+  if (lastStatusEl) { lastStatusEl.remove(); lastStatusEl = null; }
+}
+
+// ---------- ارسال پیام ----------
+async function send() {
+  if (busy) return;
+  const message = textEl.value.trim();
+  if (!message) return;
+  if (!currentModel) { alert("لطفاً یک مدل انتخاب کنید"); return; }
+
+  busy = true;
+  sendBtn.disabled = true;
+  textEl.value = "";
+
+  addBubble("user", message);
+  history.push({ role: "user", content: message });
+
+  const bubble = addBubble("assistant", "");
+  let full = "";
+
+  try {
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: currentModel, messages: history }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || ("HTTP " + res.status));
+    }
+    if (!res.body) throw new Error("پاسخ SSE در دسترس نیست");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+
+      for (const part of parts) {
+        // یک رویداد ممکن است چند خط data داشته باشد
+        const lines = part.split("\n");
+        let msg = null;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            msg = (msg === null ? "" : msg + "\n") + line.slice(6);
+          }
+        }
+        if (msg === null) continue;
+        if (msg === "[DONE]") continue;
+
+        let data;
+        try { data = JSON.parse(msg); }
+        catch { continue; }
+
+        if (data.type === "text") {
+          full += data.content;
+          bubble.span.textContent = full;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        } else if (data.type === "tool") {
+          addStatus("در حال اجرای ابزار: " + data.name);
+        } else if (data.type === "error") {
+          addStatus("خطا: " + data.content);
+        } else if (data.type === "done") {
+          clearStatus();
+        }
+      }
+    }
+  } catch (e) {
+    addStatus("خطا: " + e.message);
+  } finally {
+    // ذخیره‌ی پاسخ در تاریخچه (فقط اگر متنی تولید شده باشد)
+    if (full) {
+      history.push({ role: "assistant", content: full });
+    } else {
+      // اگر پاسخی نیامد، پیام user را هم از تاریخچه حذف کن
+      const idx = history.map(m => m.role).lastIndexOf("user");
+      if (idx >= 0) history.splice(idx, 1);
+    }
+    busy = false;
+    sendBtn.disabled = false;
+    textEl.focus();
+  }
+}
+
+// ---------- ارسال با کیبورد ----------
+sendBtn.onclick = send;
+textEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  }
+});
+
+// ---------- آپلود عکس ----------
+document.getElementById("imgbtn").onclick = () => imgInput.click();
+imgInput.onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("image", file);
+  try {
+    const r = await fetch("/upload", { method: "POST", body: form });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+    addStatus("تصویر آپلود شد. شناسه: " + data.id);
+    textEl.value += (textEl.value ? " " : "") + "[image_id: " + data.id + "] ";
+    textEl.focus();
+  } catch (e) {
+    addStatus("خطا در آپلود: " + e.message);
+  } finally {
+    imgInput.value = "";
+  }
+};
+
+// ---------- میکروفون ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR();
+  rec.lang = "fa-IR";
+  rec.interimResults = true;
+  let base = "";
+  let listening = false;
+
+  rec.onstart = () => {
+    base = textEl.value;
+    listening = true;
+    micBtn.classList.add("listening");
+    addStatus("در حال شنیدن...");
+  };
+  rec.onend = () => {
+    listening = false;
+    micBtn.classList.remove("listening");
+    clearStatus();
+  };
+  rec.onerror = (e) => {
+    listening = false;
+    micBtn.classList.remove("listening");
+    addStatus("خطای میکروفون: " + e.error);
+  };
+  rec.onresult = (e) => {
+    let t = "";
+    for (let i = 0; i < e.results.length; i++) {
+      t += e.results[i][0].transcript;
+    }
+    textEl.value = base + t;
+  };
+
+  micBtn.onclick = () => {
+    if (listening) {
+      rec.stop();
+    } else {
+      try { rec.start(); }
+      catch (e) { addStatus("خطا در میکروفون: " + e.message); }
+    }
+  };
+} else {
+  micBtn.disabled = true;
+  micBtn.title = "مرورگر از ورودی صوتی پشتیبانی نمی‌کند";
+}
+
+// ---------- شروع ----------
+loadModels();
+</script>
+</body>
+  </html>
