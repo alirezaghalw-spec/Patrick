@@ -1,5 +1,3 @@
-package com.personal.emo
-
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -27,7 +25,8 @@ class VoiceActivity : Activity() {
         super.onActivityResult(rq, rs, d)
         if (rs == RESULT_OK) {
             val list = d?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            EmoService.instance?.command(list?.joinToString(" ") ?: "")
+            // only the best recognition result, to avoid matching keywords from weaker alternatives
+            EmoService.instance?.command(list?.firstOrNull() ?: "")
         }
         finish()
     }
